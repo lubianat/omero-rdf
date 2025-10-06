@@ -50,6 +50,7 @@ Examples:
 
   omero rdf -F=jsonld Image:123      # Collects all triples and prints formatted output
   omero rdf -S=flat Project:123      # Do not recurse into containers ("flat-strategy")
+  omero rdf -S=sample Project:123    # Get only the first element from each containers ("sample-strategy")
   omero rdf --trim-whitespace ...    # Strip leading and trailing whitespace from text
   omero rdf --first-handler-wins ... # First mapping wins; others will be ignored
 
@@ -309,6 +310,9 @@ class Handler:
     def skip_descent(self):
         return self.descent != "recursive" and self._descent_level > 0
 
+    def get_sample(self):
+        return self.descent == "sample"
+
     def descending(self):
         self._descent_level += 1
 
@@ -539,7 +543,7 @@ class RdfControl(BaseControl):
             "--descent",
             "-S",
             default="recursive",
-            help="Descent strategy to use: recursive, flat",
+            help="Descent strategy to use: recursive, flat, sample",
         )
         parser.add_argument(
             "--ellide", action="store_true", default=False, help="Shorten strings"
@@ -616,9 +620,11 @@ class RdfControl(BaseControl):
                 pltid = self.descend(gateway, plate._obj, handler)
                 handler.emit((pltid, DCTERMS.isPartOf, scrid))
                 handler.emit((scrid, DCTERMS.hasPart, pltid))
+                if handler.get_sample(): break
             for annotation in scr.listAnnotations(None):
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, scrid))
+                if handler.get_sample(): break
             return scrid
 
         elif isinstance(target, Plate):
@@ -627,6 +633,7 @@ class RdfControl(BaseControl):
             for annotation in plt.listAnnotations(None):
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, pltid))
+                if handler.get_sample(): break
             for well in plt.listChildren():
                 wid = handler(well)  # No descend
                 handler.emit((wid, DCTERMS.isPartOf, pltid))
@@ -635,6 +642,7 @@ class RdfControl(BaseControl):
                     imgid = self.descend(gateway, img._obj, handler)
                     handler.emit((imgid, DCTERMS.isPartOf, wid))
                     handler.emit((wid, DCTERMS.hasPart, imgid))
+                    if handler.get_sample(): break
             return pltid
 
         elif isinstance(target, Project):
@@ -643,10 +651,12 @@ class RdfControl(BaseControl):
             for annotation in prj.listAnnotations(None):
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, prjid))
+                if self.get_sample(): break
             for ds in prj.listChildren():
                 dsid = self.descend(gateway, ds._obj, handler)
                 handler.emit((dsid, DCTERMS.isPartOf, prjid))
                 handler.emit((prjid, DCTERMS.hasPart, dsid))
+                if handler.get_sample(): break
             return prjid
 
         elif isinstance(target, Dataset):
@@ -655,10 +665,12 @@ class RdfControl(BaseControl):
             for annotation in ds.listAnnotations(None):
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, dsid))
+                if handler.get_sample(): break
             for img in ds.listChildren():
                 imgid = self.descend(gateway, img._obj, handler)
                 handler.emit((imgid, DCTERMS.isPartOf, dsid))
                 handler.emit((dsid, DCTERMS.hasPart, imgid))
+                if handler.get_sample(): break
             return dsid
 
         elif isinstance(target, Image):
@@ -671,8 +683,10 @@ class RdfControl(BaseControl):
                 img._loadAnnotationLinks()
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, imgid))
+                if handler.get_sample(): break
             for roi in self._get_rois(gateway, img):
                 handler(roi)
+                if handler.get_sample(): break
             return imgid
 
         else:
