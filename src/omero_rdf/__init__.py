@@ -36,7 +36,7 @@ from omero.sys import ParametersI
 from omero_marshal import get_encoder
 from pyld import jsonld
 from rdflib import BNode, Graph, Literal, URIRef
-from rdflib.namespace import DCTERMS, Namespace as NS, RDF
+from rdflib.namespace import DCTERMS, Namespace as NS, RDF, RDFS, SDO
 from rdflib_pyld_compat import pyld_jsonld_from_rdflib_graph
 
 HELP = """A plugin for exporting RDF from OMERO
@@ -72,6 +72,8 @@ Handlers = List[Callable[[URIRef, URIRef, Data], Generator[Triple, None, bool]]]
 
 NS_OME = NS("http://www.openmicroscopy.org/Schemas/OME/2016-06#")
 NS_OMERO = NS("http://www.openmicroscopy.org/Schemas/OMERO/2016-06#")
+
+STANDARD_ANNOTATIONS = {"Organism": NS_OME["Organism"]}
 
 
 @contextlib.contextmanager
@@ -303,6 +305,7 @@ class Handler:
         self.first_handler_wins = first_handler_wins
         self.descent = descent
         self._descent_level = 0
+        # Annotation handlers may be changed in adaptations of the plugin
         self.annotation_handlers = self.load_handlers()
         self.info = self.load_server()
         self.filehandle = filehandle
@@ -316,8 +319,13 @@ class Handler:
     def descending(self):
         self._descent_level += 1
 
+    # This delegates the handling of annotations to configurations on particular repositories
+    # It is done, for example, on https://github.com/German-BioImaging/omero-rdf-wikidata
     def load_handlers(self) -> Handlers:
         annotation_handlers: Handlers = []
+
+        # Adds room for using diverse annotation_handlers
+        # The default pipeline is used if they are not present
         eps = entry_points()
         for ep in eps.get("omero_rdf.annotation_handler", []):
             ah_loader = ep.load()
@@ -330,6 +338,8 @@ class Handler:
         return self.gateway.c.getRouter(comm).ice_getEndpoints()[0].getInfo()
 
     def get_identity(self, _type: str, _id: Any) -> URIRef:
+
+        # Workaround for object names ending with I from the gateway, e.g. ImageI
         if _type.endswith("I") and _type != ("ROI"):
             _type = _type[0:-1]
         return URIRef(f"https://{self.info.host}/{_type}/{_id}")
@@ -385,16 +395,25 @@ class Handler:
         if isinstance(obj, IObject):
             # Not a wrapper object
             for annotation in obj.linkedAnnotationList():
+
+                # Calls the functor instance of Handler
+                # Which parsers annotation with the omero-marshal encoder
+                # E.g. https://github.com/ome/omero-marshal/blob/master/omero_marshal/encode/encoders/map_annotation.py
                 annid = self(annotation)
                 self.contains(objid, annid)
-                if self.get_sample(): break
+                if self.get_sample():
+                    break
         else:
             for annotation in obj.listAnnotations(None):
                 obj._loadAnnotationLinks()
+
+                # Calls the functor instance of Handler
+                # Which parsers annotation with the omero-marshal encoder
+                # E.g. https://github.com/ome/omero-marshal/blob/master/omero_marshal/encode/encoders/map_annotation.py
                 annid = self(annotation)
                 self.contains(objid, annid)
-                if self.get_sample(): break
-
+                if self.get_sample():
+                    break
 
     def handle(self, data: Data) -> URIRef:
         """
@@ -413,6 +432,20 @@ class Handler:
         _id = self.get_identity(_type, str_id)
 
         for triple in self.rdf(_id, data):
+
+            # Hardcode mapping from ome:Name to rdfs:label and ome:Description to SDO:description
+            # This follows the choices on Wikidata.
+            if "http://www.openmicroscopy.org/Schemas/OME/2016-06#Name" in triple[1]:
+                new_triple = (triple[0], RDFS.label, triple[2])
+                triple = new_triple
+
+            if (
+                "http://www.openmicroscopy.org/Schemas/OME/2016-06#Description"
+                in triple[1]
+            ):
+                new_triple = (triple[0], SDO.description, triple[2])
+                triple = new_triple
+
             if triple:
                 if None in triple:
                     logging.debug("skipping None value: %s %s %s", triple)
@@ -449,15 +482,18 @@ class Handler:
         _type = self.get_type(data)
 
         # Temporary workaround while deciding how to pass annotations
-        if "Annotation" in str(_type):
-            for ah in self.annotation_handlers:
-                handled = yield from ah(
-                    None,
-                    None,
-                    data,
-                )
-                if self.first_handler_wins and handled:
-                    return
+        # Checking length is redundant; just a sanity check, as
+        # the list of annotation_handlers can be empty.
+        if len(self.annotation_handlers) > 0:
+            if "Annotation" in str(_type):
+                for ah in self.annotation_handlers:
+                    handled = yield from ah(
+                        None,
+                        None,
+                        data,
+                    )
+                    if self.first_handler_wins and handled:
+                        return
         # End workaround
 
         if _id in self.cache:
@@ -466,71 +502,101 @@ class Handler:
         else:
             self.cache.add(_id)
 
-        for k, v in sorted(data.items()):
+        for top_level_key, top_level_value in sorted(data.items()):
 
-            if k == "@type":
-                if v.startswith("http"):
-                    yield (_id, RDF.type, URIRef(v))
-                elif v.startswith("omero:"):
-                    yield (_id, RDF.type, NS_OMERO[v])
+            if top_level_key == "@type":
+                if top_level_value.startswith("http"):
+                    yield (_id, RDF.type, URIRef(top_level_value))
+                elif top_level_value.startswith("omero:"):
+                    yield (_id, RDF.type, NS_OMERO[top_level_value])
                 else:
-                    yield (_id, RDF.type, NS_OME[v])
-            elif k in ("@id", "omero:details", "Annotations"):
+                    yield (_id, RDF.type, NS_OME[top_level_value])
+
+            elif top_level_key in ("@id", "omero:details", "Annotations"):
                 # Types that we want to omit for now
                 pass
             else:
                 # Refactor back to get_key? TODO
-                if k.startswith("omero:"):
-                    key = NS_OMERO[k[6:]]
+                if top_level_key.startswith("omero:"):
+                    key_as_uri = NS_OMERO[top_level_key[6:]]
                 else:
-                    key = NS_OME[k]
+                    key_as_uri = NS_OME[top_level_key]
 
-                if isinstance(v, dict):
-                    # This is an object
-                    if "@id" in v:
-                        yield from self.yield_object_with_id(_id, key, v)
+                # Check if the top level value is itself an object
+                if isinstance(top_level_value, dict):
+                    if "@id" in top_level_value:
+                        yield from self.yield_object_with_id(
+                            _id, key_as_uri, top_level_value
+                        )
+
                     else:
                         # Without an identity, use a bnode
                         # TODO: store by value for re-use?
                         bnode = self.get_bnode()
-                        yield (_id, key, bnode)
-                        yield from self.rdf(bnode, v)
+                        yield (_id, key_as_uri, bnode)
+                        yield from self.rdf(bnode, top_level_value)
 
-                elif isinstance(v, list):
-                    # This is likely the [[key, value], ...] structure?
-                    # can also be shapes
-                    for item in v:
+                # Here below may parse a [[key,value], [[key,value]] construct
+                # It is found in some annotation kinds
+                elif isinstance(top_level_value, list):
+
+                    for item in top_level_value:
+                        # The item is an object and should be handled completely
                         if isinstance(item, dict) and "@id" in item:
-                            yield from self.yield_object_with_id(_id, key, item)
+                            yield from self.yield_object_with_id(_id, key_as_uri, item)
+
+                        # The object is one nested list with key, value pairs (length of 2)
                         elif isinstance(item, list) and len(item) == 2:
-                            bnode = self.get_bnode()
-                            # TODO: KVPs need ordering info, also no use of "key" here.
-                            yield (_id, NS_OME["Map"], bnode)
-                            yield (
-                                bnode,
-                                NS_OME["Key"],
-                                self.literal(item[0]),
-                            )
-                            yield (
-                                bnode,
-                                NS_OME["Value"],
-                                self.literal(item[1]),
-                            )
+
+                            annotation_key = item[0]
+                            annotation_value = item[1]
+
+                            # Parses expected key-value pairs in a direct way
+                            # TODO validate the annotation_value;
+                            # parse in direct way only if it is well-formed
+                            if _type == "MapAnnotation":
+                                if annotation_key in STANDARD_ANNOTATIONS.keys():
+                                    annotation_key_uri = STANDARD_ANNOTATIONS[
+                                        annotation_key
+                                    ]
+                                    yield (
+                                        _id,
+                                        annotation_key_uri,
+                                        self.literal(annotation_value),
+                                    )
+                                # Creates a blank node for other kinds
+                                else:
+                                    bnode = self.get_bnode()
+
+                                    # TODO: KVPs need ordering info, also no use of "key" here.
+                                    yield (_id, NS_OME["Map"], bnode)
+                                    yield (
+                                        bnode,
+                                        NS_OME["Key"],
+                                        self.literal(annotation_key),
+                                    )
+                                    yield (
+                                        bnode,
+                                        NS_OME["Value"],
+                                        self.literal(annotation_value),
+                                    )
+
                         else:
                             raise Exception(f"unknown list item: {item}")
                 else:
-                    yield (_id, key, self.literal(v))
+                    yield (_id, key_as_uri, self.literal(top_level_value))
 
-        # Special handling for Annotations
+        # Creates the room for special handling for Annotations
+        # If not, default to the base processing from self.rdf()
+        # This is present, for example, on some Image objects
         annotations = data.get("Annotations", [])
         for annotation in annotations:
-
             handled = False
-            for ah in self.annotation_handlers:
-                handled = yield from ah(_id, NS_OME["annotation"], annotation)
-                if handled:
-                    break
-
+            if len(self.annotation_handlers) > 0:
+                for ah in self.annotation_handlers:
+                    handled = yield from ah(_id, NS_OME["annotation"], annotation)
+                    if handled:
+                        break
             if not handled:  # TODO: could move to a default handler
                 aid = self.get_identity("AnnotationTBD", annotation["@id"])
                 yield (_id, NS_OME["annotation"], aid)
@@ -645,7 +711,8 @@ class RdfControl(BaseControl):
             for plate in scr.listChildren():
                 pltid = self.descend(gateway, plate._obj, handler)
                 handler.contains(scrid, pltid)
-                if handler.get_sample(): break
+                if handler.get_sample():
+                    break
             handler.annotations(scr, scrid)
             return scrid
 
@@ -660,7 +727,8 @@ class RdfControl(BaseControl):
                     img = well.getImage(idx)
                     imgid = self.descend(gateway, img._obj, handler)
                     handler.contains(wid, imgid)
-                    if handler.get_sample(): break
+                    if handler.get_sample():
+                        break
             return pltid
 
         elif isinstance(target, Project):
@@ -670,7 +738,8 @@ class RdfControl(BaseControl):
             for ds in prj.listChildren():
                 dsid = self.descend(gateway, ds._obj, handler)
                 handler.contains(prjid, dsid)
-                if handler.get_sample(): break
+                if handler.get_sample():
+                    break
             return prjid
 
         elif isinstance(target, Dataset):
@@ -680,7 +749,8 @@ class RdfControl(BaseControl):
             for img in ds.listChildren():
                 imgid = self.descend(gateway, img._obj, handler)
                 handler.contains(dsid, imgid)
-                if handler.get_sample(): break
+                if handler.get_sample():
+                    break
             return dsid
 
         elif isinstance(target, Image):
@@ -698,8 +768,10 @@ class RdfControl(BaseControl):
                     shapeid = handler(shape)
                     handler.annotations(shape, shapeid)
                     handler.contains(roiid, shapeid)
-                    if handler.get_sample(): break
-                if handler.get_sample(): break
+                    if handler.get_sample():
+                        break
+                if handler.get_sample():
+                    break
             return imgid
 
         else:
