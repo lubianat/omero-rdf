@@ -73,11 +73,15 @@ Handlers = List[Callable[[URIRef, URIRef, Data], Generator[Triple, None, bool]]]
 NS_OME = NS("http://www.openmicroscopy.org/Schemas/OME/2016-06#")
 NS_OMERO = NS("http://www.openmicroscopy.org/Schemas/OMERO/2016-06#")
 
+<<<<<<< HEAD
 # NAMESPACE FROM OMERO-ONTOP MAPPINGS
 
 NS_ANNOTATIONS = NS("http://www.openmicroscopy.org/ns/default/")
 
 STANDARD_ANNOTATIONS = {"Organism": NS_ANNOTATIONS["Organism"]}
+=======
+STANDARD_ANNOTATIONS = {"Organism": NS_OME["Organism"]}
+>>>>>>> 25b17fae30074346ce715221c0a826900835a729
 
 
 @contextlib.contextmanager
@@ -408,6 +412,7 @@ class Handler:
         if isinstance(obj, IObject):
             # Not a wrapper object
             for annotation in obj.linkedAnnotationList():
+<<<<<<< HEAD
                 handle_annotation(self, annotation)
                 if self.get_sample():
                     break
@@ -416,6 +421,25 @@ class Handler:
             for annotation in obj.listAnnotations(None):
                 obj._loadAnnotationLinks()
                 handle_annotation(self, annotation)
+=======
+
+                # Calls the functor instance of Handler
+                # Which parsers annotation with the omero-marshal encoder
+                # E.g. https://github.com/ome/omero-marshal/blob/master/omero_marshal/encode/encoders/map_annotation.py
+                annid = self(annotation)
+                self.contains(objid, annid)
+                if self.get_sample():
+                    break
+        else:
+            for annotation in obj.listAnnotations(None):
+                obj._loadAnnotationLinks()
+
+                # Calls the functor instance of Handler
+                # Which parsers annotation with the omero-marshal encoder
+                # E.g. https://github.com/ome/omero-marshal/blob/master/omero_marshal/encode/encoders/map_annotation.py
+                annid = self(annotation)
+                self.contains(objid, annid)
+>>>>>>> 25b17fae30074346ce715221c0a826900835a729
                 if self.get_sample():
                     break
 
@@ -564,7 +588,11 @@ class Handler:
                                         annotation_key
                                     ]
                                     yield (
+<<<<<<< HEAD
                                         self.parent_objid,
+=======
+                                        _id,
+>>>>>>> 25b17fae30074346ce715221c0a826900835a729
                                         annotation_key_uri,
                                         self.literal(annotation_value),
                                     )
