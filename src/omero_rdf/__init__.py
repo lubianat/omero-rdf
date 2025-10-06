@@ -651,7 +651,7 @@ class RdfControl(BaseControl):
             for annotation in prj.listAnnotations(None):
                 annid = handler(annotation)
                 handler.emit((annid, DCTERMS.isPartOf, prjid))
-                if self.get_sample(): break
+                if handler  .get_sample(): break
             for ds in prj.listChildren():
                 dsid = self.descend(gateway, ds._obj, handler)
                 handler.emit((dsid, DCTERMS.isPartOf, prjid))
