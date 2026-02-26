@@ -20,6 +20,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Debug tags on HEAD
+        run: |
+          git rev-parse HEAD
+          git tag --points-at HEAD
+          git describe --tags --always
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+    
       - name: Build sdist and wheel
         run: |
           python -m pip install --upgrade pip
