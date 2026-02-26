@@ -16,6 +16,7 @@ jobs:
         with:
           ref: ${{ github.ref }}     # refs/tags/<tag> for releases
           fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-python@v5
         with:
