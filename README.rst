@@ -44,22 +44,20 @@ Using `uv` (recommended):
 
    (or prefix commands with ``uv run`` instead of activating).
 
-3. Uncomment the lines on `pyproject.toml` related to `zeroc-ice` installation.
-
-4. Install in editable mode with test dependencies:
+3. Install in editable mode with test dependencies:
 
    ::
-
+       uv pip install -r zeroc-ice-requirements.txt
        uv pip install -e ".[tests,dev]"
 
-5. Run the test suite:
+4. Run the test suite:
 
    ::
 
        pytest test/unit
        pytest test/integration/test_idr
 
-6. Lint and format:
+5. Lint and format:
 
    ::
 
@@ -73,6 +71,7 @@ To run pre-commit hooks:
 
    uv tool install pre-commit
    pre-commit run --all-files
+
 
 Quick check against IDR
 -----------------------
@@ -91,6 +90,14 @@ the public IDR server to confirm the CLI works (public credentials):
    ::
 
        omero rdf -F=turtle Project:2902 -S=flat | head  -n 10
+
+Mocking GitHub Actions checks
+
+1. If you have gh installed, you can run the checks locally:
+
+   ::
+
+       gh act push
 
 Release process
 ---------------
